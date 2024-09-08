@@ -26,6 +26,10 @@ def _find_error(output: list[str]) -> str:
     # in the worst case, return a default
     return "unknown error"
 
+import logging
+
+hmmscan_time=0
+pyhmmscan_time=0
 
 def run_hmmscan(target_hmmfile: str, query_sequence: str, opts: List[str] = None,
                 results_file: str = None) -> List[SearchIO._model.query.QueryResult]:  # pylint: disable=protected-access
@@ -41,6 +45,12 @@ def run_hmmscan(target_hmmfile: str, query_sequence: str, opts: List[str] = None
             a list of QueryResults as parsed from hmmscan output by SearchIO
 
     """
+    import time
+    from pyhmmer import easel, hmmer, plan7
+
+    global hmmscan_time
+    global pyhmmscan_time
+
     if not query_sequence:
         raise ValueError("Cannot run hmmscan on empty sequence")
 
@@ -54,7 +64,13 @@ def run_hmmscan(target_hmmfile: str, query_sequence: str, opts: List[str] = None
     if opts is not None:
         command.extend(opts)
     command.extend([target_hmmfile, '-'])
+
+    start_time = time.time()
     result = execute(command, stdin=query_sequence)
+    search_time = (time.time() - start_time)
+    hmmscan_time += search_time
+    logging.info(f"hmmscan_time: {hmmscan_time}")
+
     if not result.successful():
         raise RuntimeError("".join([
             f"hmmscan returned {result.return_code}: ",
@@ -64,6 +80,25 @@ def run_hmmscan(target_hmmfile: str, query_sequence: str, opts: List[str] = None
     if results_file is not None:
         with open(results_file, "w", encoding="utf-8") as handle:
             handle.write(result.stdout)
+
+    # pyhmmscan begins
+    start_time = time.time()
+    with open("hmmscan_query.fa", "w", encoding="utf-8") as handle:
+        handle.write(query_sequence)
+    seq_file = easel.SequenceFile("hmmscan_query.fa", digital=True, alphabet=easel.Alphabet.amino())        
+    hmm_file = plan7.HMMFile(target_hmmfile)
+    hits_list = list(hmmer.hmmscan(seq_file, hmm_file, cpus=80))
+
+    pyhmmscan_output = open("pyhmmscan_output.txt", "wb")
+    hits_list[0].write(pyhmmscan_output, format="domains", header=True)
+    for hit in hits_list[1:]:
+        hit.write(pyhmmscan_output, format="domains", header=False)
+    pyhmmscan_output.close()
+
+    search_time = (time.time() - start_time)
+    pyhmmscan_time += search_time
+    logging.info(f"pyhmmscan_time: {pyhmmscan_time}")
+    # pyhmmscan ends
 
     return list(SearchIO.parse(StringIO(result.stdout), 'hmmer3-text'))
 
